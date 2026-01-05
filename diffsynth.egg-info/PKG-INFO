@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: diffsynth
+Version: 2.0.0
+Summary: Enjoy the magic of Diffusion models!
+Author: ModelScope Team
+License: Apache-2.0
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.10
+Requires-Dist: torch>=2.0.0
+Requires-Dist: torchvision
+Requires-Dist: transformers
+Requires-Dist: imageio
+Requires-Dist: imageio[ffmpeg]
+Requires-Dist: safetensors
+Requires-Dist: einops
+Requires-Dist: sentencepiece
+Requires-Dist: protobuf
+Requires-Dist: modelscope
+Requires-Dist: ftfy
+Requires-Dist: pandas
+Requires-Dist: accelerate
+Requires-Dist: peft
+Requires-Dist: datasets

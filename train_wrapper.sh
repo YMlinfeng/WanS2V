@@ -1,0 +1,9 @@
+#!/bin/bash
+# 从 MPI 环境变量获取 rank 信息
+export RANK=$OMPI_COMM_WORLD_RANK
+export LOCAL_RANK=$OMPI_COMM_WORLD_LOCAL_RANK
+
+echo "🔧 Process RANK=$RANK, LOCAL_RANK=$LOCAL_RANK, WORLD_SIZE=$WORLD_SIZE, MASTER_ADDR=$MASTER_ADDR"
+
+# 执行传入的命令
+exec "$@"

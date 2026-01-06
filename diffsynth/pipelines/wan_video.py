@@ -212,7 +212,8 @@ class WanVideoPipeline(BasePipeline):
         self.vap: MotWanModel = None
         self.animate_adapter: WanAnimateAdapter = None
         self.audio_encoder: WanS2VAudioEncoder = None #!
-        self.in_iteration_models = ("dit", "motion_controller", "vace", "animate_adapter", "vap")
+        # self.in_iteration_models = ("dit", "motion_controller", "vace", "animate_adapter", "vap")
+        self.in_iteration_models = ("dit",) # or ['dit']
         self.in_iteration_models_2 = ("dit2", "motion_controller", "vace2", "animate_adapter", "vap")
         self.units = [
             WanVideoUnit_ShapeChecker(),
@@ -327,12 +328,11 @@ class WanVideoPipeline(BasePipeline):
             pipe.audio_processor = Wav2Vec2Processor.from_pretrained(audio_processor_config.path)
         
         # Unified Sequence Parallel
-        # if use_usp: pipe.enable_usp()
+        if use_usp: pipe.enable_usp()
         
         # VRAM Management
         pipe.vram_management_enabled = pipe.check_vram_management_state()
         return pipe
-
 
     @torch.no_grad()
     def __call__(
@@ -437,7 +437,8 @@ class WanVideoPipeline(BasePipeline):
             "longcat_video": longcat_video,
             "tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride,
             "sliding_window_size": sliding_window_size, "sliding_window_stride": sliding_window_stride,
-            "input_audio": input_audio, "audio_sample_rate": audio_sample_rate, "s2v_pose_video": s2v_pose_video, "audio_embeds": audio_embeds, "s2v_pose_latents": s2v_pose_latents, "motion_video": motion_video,
+            "input_audio": input_audio, "audio_sample_rate": audio_sample_rate, 
+            "s2v_pose_video": s2v_pose_video, "audio_embeds": audio_embeds, "s2v_pose_latents": s2v_pose_latents, "motion_video": motion_video,
             "animate_pose_video": animate_pose_video, "animate_face_video": animate_face_video, "animate_inpaint_video": animate_inpaint_video, "animate_mask_video": animate_mask_video,
             "vap_video": vap_video, 
         }
@@ -455,32 +456,25 @@ class WanVideoPipeline(BasePipeline):
                 models["vace"] = self.vace2
                 
             # Timestep
-            timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device)
+            timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device) #[1000.]
             
             # Inference
-            noise_pred_posi = self.model_fn(**models, **inputs_shared, **inputs_posi, timestep=timestep)
+            noise_pred_posi = self.model_fn(**models, **inputs_shared, **inputs_posi, timestep=timestep) # torch.Size([1, 16, 15, H, W])
             if cfg_scale != 1.0:
                 if cfg_merge:
                     noise_pred_posi, noise_pred_nega = noise_pred_posi.chunk(2, dim=0)
                 else:
-                    noise_pred_nega = self.model_fn(**models, **inputs_shared, **inputs_nega, timestep=timestep)
+                    noise_pred_nega = self.model_fn(**models, **inputs_shared, **inputs_nega, timestep=timestep) # 一遍前向过程仅需一秒多
                 noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
             else:
                 noise_pred = noise_pred_posi
 
-            # Scheduler
+            # Scheduler 利用预测出的噪声 noise_pred，计算出上一个时间步（噪声更少）的 Latents。这是画面逐渐清晰的过程
             inputs_shared["latents"] = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], inputs_shared["latents"])
             if "first_frame_latents" in inputs_shared:
                 inputs_shared["latents"][:, :, 0:1] = inputs_shared["first_frame_latents"]
         
-        # VACE 
-        # if vace_reference_image is not None or (animate_pose_video is not None and animate_face_video is not None):
-            # if vace_reference_image is not None and isinstance(vace_reference_image, list):
-            #     f = len(vace_reference_image)
-            # else:
-            #     f = 1
-            # inputs_shared["latents"] = inputs_shared["latents"][:, :, f:]
-        # post-denoising, pre-decoding processing logic
+
         for unit in self.post_units:
             inputs_shared, _, _ = self.unit_runner(unit, self, inputs_shared, inputs_posi, inputs_nega)
         # Decode
@@ -674,7 +668,7 @@ class WanVideoUnit_ImageEmbedderFused(PipelineUnit):
         else:
             resized_image = input_image.resize((width, height))
             image = pipe.preprocess_image(resized_image).transpose(0, 1) #（C， B， H， W）
-        # image = (image + 1.0) / 2.0; plt.imsave("output1.png", F.to_pil_image(image))
+        # image = (image + 1.0) / 2.0; plt.imsave("output1.png", F.to_pil_image(image.float()))
         # import torch; import matplotlib.pyplot as plt; import torchvision.transforms.functional as F; image = image.squeeze(1).to(torch.float32); plt.imsave("output1.png", F.to_pil_image(image))
 
         z = pipe.vae.encode([image], device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)

@@ -7,6 +7,8 @@ from ..core import AutoTorchModule, AutoWrappedLinear, load_state_dict, ModelCon
 from ..utils.lora import GeneralLoRALoader
 from ..models.model_loader import ModelPool
 from ..utils.controlnet import ControlNetInput
+import matplotlib.pyplot as plt
+import torchvision.transforms.functional as F
 
 
 class PipelineUnit:
@@ -14,11 +16,11 @@ class PipelineUnit:
         self,
         seperate_cfg: bool = False,
         take_over: bool = False,
-        input_params: tuple[str] = None,
-        output_params: tuple[str] = None,
-        input_params_posi: dict[str, str] = None,
-        input_params_nega: dict[str, str] = None,
-        onload_model_names: tuple[str] = None
+        input_params: tuple[str] = None, #type:ignore
+        output_params: tuple[str] = None, #type:ignore
+        input_params_posi: dict[str, str] = None, #type:ignore
+        input_params_nega: dict[str, str] = None, #type:ignore
+        onload_model_names: tuple[str] = None #type:ignore
     ):
         self.seperate_cfg = seperate_cfg
         self.take_over = take_over
@@ -112,7 +114,7 @@ class BasePipeline(torch.nn.Module):
     def preprocess_image(self, image, torch_dtype=None, device=None, pattern="B C H W", min_value=-1, max_value=1):
         # Transform a PIL.Image to torch.Tensor
         image = torch.Tensor(np.array(image, dtype=np.float32))
-        image = image.to(dtype=torch_dtype or self.torch_dtype, device=device or self.device)
+        image = image.to(dtype=torch_dtype or self.torch_dtype, device=device or self.device) # self.torch_dtype=bf16
         image = image * ((max_value - min_value) / 255) + min_value
         image = repeat(image, f"H W C -> {pattern}", **({"B": 1} if "B" in pattern else {}))
         return image
@@ -215,7 +217,7 @@ class BasePipeline(torch.nn.Module):
         return latents_next
     
     
-    def split_pipeline_units(self, model_names: list[str]):
+    def split_pipeline_units(self, model_names: list[str]): #type:ignore
         return PipelineUnitGraph().split_pipeline_units(self.units, model_names)
     
     
@@ -279,7 +281,7 @@ class BasePipeline(torch.nn.Module):
         print(f"{cleared_num} LoRA layers are cleared.")
         
     
-    def download_and_load_models(self, model_configs: list[ModelConfig] = [], vram_limit: float = None):
+    def download_and_load_models(self, model_configs: list[ModelConfig] = [], vram_limit: float = None): #type:ignore
         model_pool = ModelPool()
         for model_config in model_configs:
             model_config.download_if_necessary()
@@ -317,7 +319,7 @@ class PipelineUnitGraph:
     def __init__(self):
         pass
     
-    def build_edges(self, units: list[PipelineUnit]):
+    def build_edges(self, units: list[PipelineUnit]): #type:ignore
         # Establish dependencies between units
         # to search for subsequent related computation units.
         last_compute_unit_id = {}
@@ -330,7 +332,7 @@ class PipelineUnitGraph:
                 last_compute_unit_id[output_param] = unit_id
         return edges
     
-    def build_chains(self, units: list[PipelineUnit]):
+    def build_chains(self, units: list[PipelineUnit]): #type:ignore
         # Establish updating chains for each variable
         # to track their computation process.
         params = sum([unit.fetch_input_params() + unit.fetch_output_params() for unit in units], [])
@@ -341,7 +343,7 @@ class PipelineUnitGraph:
                 chains[param].append(unit_id)
         return chains
     
-    def search_direct_unit_ids(self, units: list[PipelineUnit], model_names: list[str]):
+    def search_direct_unit_ids(self, units: list[PipelineUnit], model_names: list[str]): #type:ignore
         # Search for units that directly participate in the model's computation.
         related_unit_ids = []
         for unit_id, unit in enumerate(units):
@@ -369,7 +371,7 @@ class PipelineUnitGraph:
         related_unit_ids = sorted(list(set(related_unit_ids)))
         return related_unit_ids
     
-    def search_updating_unit_ids(self, units: list[PipelineUnit], chains, related_unit_ids):
+    def search_updating_unit_ids(self, units: list[PipelineUnit], chains, related_unit_ids): #type:ignore
         # If the input parameters of this subgraph are updated outside the subgraph,
         # search for the units where these updates occur.
         first_compute_unit_id = {}
@@ -389,7 +391,7 @@ class PipelineUnitGraph:
         related_unit_ids = sorted(list(set(related_unit_ids)))
         return related_unit_ids
     
-    def split_pipeline_units(self, units: list[PipelineUnit], model_names: list[str]):
+    def split_pipeline_units(self, units: list[PipelineUnit], model_names: list[str]): #type:ignore
         # Split the computation graph,
         # separating all model-related computations.
         related_unit_ids = self.search_direct_unit_ids(units, model_names)
@@ -412,7 +414,7 @@ class PipelineUnitRunner:
     def __init__(self):
         pass
 
-    def __call__(self, unit: PipelineUnit, pipe: BasePipeline, inputs_shared: dict, inputs_posi: dict, inputs_nega: dict) -> tuple[dict, dict]:
+    def __call__(self, unit: PipelineUnit, pipe: BasePipeline, inputs_shared: dict, inputs_posi: dict, inputs_nega: dict) -> tuple[dict, dict]: #type:ignore
         if unit.take_over:
             # Let the pipeline unit take over this function.
             inputs_shared, inputs_posi, inputs_nega = unit.process(pipe, inputs_shared=inputs_shared, inputs_posi=inputs_posi, inputs_nega=inputs_nega)

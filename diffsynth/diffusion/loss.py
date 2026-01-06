@@ -12,12 +12,12 @@ def FlowMatchSFTLoss(pipe: BasePipeline, **inputs):
     timestep_id = torch.randint(min_timestep_boundary, max_timestep_boundary, (1,))
     timestep = pipe.scheduler.timesteps[timestep_id].to(dtype=pipe.torch_dtype, device=pipe.device)
     
-    noise = torch.randn_like(inputs["input_latents"])
+    noise = torch.randn_like(inputs["input_latents"]) # [1, 16, 15, 80, 60]
     inputs["latents"] = pipe.scheduler.add_noise(inputs["input_latents"], noise, timestep)
     training_target = pipe.scheduler.training_target(inputs["input_latents"], noise, timestep)
     
     models = {name: getattr(pipe, name) for name in pipe.in_iteration_models}
-    noise_pred = pipe.model_fn(**models, **inputs, timestep=timestep)
+    noise_pred = pipe.model_fn(**models, **inputs, timestep=timestep) # torch.Size([1, 16, 15, 80, 60])
     
     loss = torch.nn.functional.mse_loss(noise_pred.float(), training_target.float())
     loss = loss * pipe.scheduler.training_weight(timestep)
@@ -42,7 +42,7 @@ class TrajectoryImitationLoss(torch.nn.Module):
         self.initialized = False
     
     def initialize(self, device):
-        import lpips # TODO: remove it
+        import lpips 
         self.loss_fn = lpips.LPIPS(net='alex').to(device)
         self.initialized = True
 

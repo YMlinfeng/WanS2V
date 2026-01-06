@@ -26,6 +26,7 @@ from ..models.wan_video_animate_adapter import WanAnimateAdapter
 from ..models.wan_video_mot import MotWanModel
 from ..models.wav2vec import WanS2VAudioEncoder
 import torchvision.transforms.functional as F
+import matplotlib.pyplot as plt
 
 def visualize_tensor(tensor_data, save_prefix="debug_output_data", fps=15):
     """
@@ -104,6 +105,91 @@ def visualize_tensor(tensor_data, save_prefix="debug_output_data", fps=15):
     else:
         print(f"⚠️ [Visualizer] 跳过: 形状 {data.shape} 不支持")
 
+def visualize_latents(latents, save_prefix="debug_latents", fps=8):
+    """
+    专门用于可视化 5D Latents (B, C, F, H, W)
+    由于 Latents 有16个通道，无法直接显示，这里提供"前3通道伪彩色"和"热力图"两种视角。
+    """
+    # === 1. 内部导入 ===
+    import torch
+    import numpy as np
+    import os
+    import imageio
+    import matplotlib.pyplot as plt
+
+    # === 2. 准备目录 ===
+    save_dir = os.path.dirname(save_prefix)
+    if save_dir and not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+
+    print(f"[LatentVis] Input shape: {latents.shape}")
+
+    # === 3. 数据预处理 ===
+    # 确保是 (C, F, H, W) 结构 (去掉 Batch 维度)
+    # 如果是 (B, C, F, H, W)，取第0个样本
+    if latents.ndim == 5:
+        data = latents[0].detach().cpu().float()
+    elif latents.ndim == 4:
+        data = latents.detach().cpu().float()
+    else:
+        print(f"❌ [LatentVis] 维度不对，跳过: {latents.shape}")
+        return
+
+    # === 视点 A: 伪彩色 (取前3个通道模拟 RGB) ===
+    # 形状: (3, F, H, W) -> (F, H, W, 3)
+    rgb_proxy = data[:3, :, :, :].permute(1, 2, 3, 0).numpy()
+    
+    # Latents 数值通常在 -3 到 3 之间，我们需要重新映射到 0-255
+    # 这里采用统计归一化，让画面对比度正常一点
+    mean_val = np.mean(rgb_proxy)
+    std_val = np.std(rgb_proxy)
+    # 截断在 (均值 ± 2个标准差) 范围内
+    rgb_proxy = np.clip(rgb_proxy, mean_val - 2*std_val, mean_val + 2*std_val)
+    # 归一化到 0-255
+    rgb_proxy = ((rgb_proxy - rgb_proxy.min()) / (rgb_proxy.max() - rgb_proxy.min() + 1e-6) * 255.0).astype(np.uint8)
+
+    # === 视点 B: 能量热力图 (所有通道取绝对值平均) ===
+    # (16, F, H, W) -> (F, H, W)
+    activation = torch.mean(torch.abs(data), dim=0).numpy()
+    # 归一化
+    activation = ((activation - activation.min()) / (activation.max() - activation.min() + 1e-6) * 255.0).astype(np.uint8)
+
+    # === 4. 保存为视频 ===
+    try:
+        # 保存伪彩色视频
+        path_rgb = f"{save_prefix}_pseudo_rgb.mp4"
+        imageio.mimsave(path_rgb, rgb_proxy, fps=fps, codec='libx264', macro_block_size=1)
+        print(f"✅ [Latent] 伪彩色视频: {path_rgb}")
+
+        # 保存热力图视频
+        path_act = f"{save_prefix}_activation.mp4"
+        imageio.mimsave(path_act, activation, fps=fps, codec='libx264', macro_block_size=1)
+        print(f"✅ [Latent] 热力图视频: {path_act}")
+
+    except Exception as e:
+        print(f"❌ [Latent] 保存视频失败: {e}，尝试保存 GIF...")
+        imageio.mimsave(f"{save_prefix}_activation.gif", activation, fps=fps)
+
+    # === 5. 保存第一帧对比图 (JPG) ===
+    try:
+        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+        
+        ax[0].imshow(rgb_proxy[0])
+        ax[0].set_title(f"Frame 0 (Pseudo RGB)\nShape: {rgb_proxy[0].shape}")
+        ax[0].axis('off')
+
+        ax[1].imshow(activation[0], cmap='inferno') # 使用热力图配色
+        ax[1].set_title(f"Frame 0 (Activation Map)\nMean across {data.shape[0]} channels")
+        ax[1].axis('off')
+
+        jpg_path = f"{save_prefix}_frame0_check.jpg"
+        plt.tight_layout()
+        plt.savefig(jpg_path)
+        plt.close()
+        print(f"✅ [Latent] 第一帧对比图: {jpg_path}")
+    except Exception as e:
+        print(f"⚠️ 保存图片失败: {e}")
+
 
 class WanVideoPipeline(BasePipeline):
 
@@ -137,13 +223,13 @@ class WanVideoPipeline(BasePipeline):
             WanVideoUnit_ImageEmbedderVAE(),
             WanVideoUnit_ImageEmbedderCLIP(),
             WanVideoUnit_ImageEmbedderFused(),
-            # WanVideoUnit_FunControl(), #todo
-            # WanVideoUnit_FunReference(), #todo
-            # WanVideoUnit_FunCameraControl(), #TODO
-            # WanVideoUnit_SpeedControl(), # todo
+            # WanVideoUnit_FunControl(), 
+            # WanVideoUnit_FunReference(), 
+            # WanVideoUnit_FunCameraControl(), 
+            # WanVideoUnit_SpeedControl(), 
             # WanVideoUnit_VACE(),
             # WanVideoUnit_AnimateVideoSplit(),
-            # WanVideoUnit_AnimatePoseLatents(), #todo
+            # WanVideoUnit_AnimatePoseLatents(), 
             # WanVideoUnit_AnimateFacePixelValues(),
             # WanVideoUnit_AnimateInpaint(),
             # WanVideoUnit_VAP(),
@@ -387,7 +473,7 @@ class WanVideoPipeline(BasePipeline):
             if "first_frame_latents" in inputs_shared:
                 inputs_shared["latents"][:, :, 0:1] = inputs_shared["first_frame_latents"]
         
-        # VACE (TODO: remove it)
+        # VACE 
         # if vace_reference_image is not None or (animate_pose_video is not None and animate_face_video is not None):
             # if vace_reference_image is not None and isinstance(vace_reference_image, list):
             #     f = len(vace_reference_image)
@@ -581,23 +667,34 @@ class WanVideoUnit_ImageEmbedderFused(PipelineUnit):
         if input_image is None or not pipe.dit.fuse_vae_embedding_in_latents:
             return {}
         pipe.load_models_to_device(self.onload_model_names)
-        # import torch; import matplotlib.pyplot as plt; import torchvision.transforms.functional as F; input_image = input_image.to(torch.float32); plt.imsave("output0.png", F.to_pil_image(input_image))
+        # input_image = (input_image + 1.0) / 2.0; plt.imsave("output0.png", F.to_pil_image(input_image))
         if isinstance(input_image, torch.Tensor):
             resized_image = F.resize(input_image, (height, width)) 
             image = resized_image.unsqueeze(1)
         else:
             resized_image = input_image.resize((width, height))
             image = pipe.preprocess_image(resized_image).transpose(0, 1) #（C， B， H， W）
+        # image = (image + 1.0) / 2.0; plt.imsave("output1.png", F.to_pil_image(image))
         # import torch; import matplotlib.pyplot as plt; import torchvision.transforms.functional as F; image = image.squeeze(1).to(torch.float32); plt.imsave("output1.png", F.to_pil_image(image))
-        # tensor2PIL: input_image = F.to_pil_image(first_frame)
-        z = pipe.vae.encode([image], device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)
-        print(f"DEBUG: latents version before assignment: {latents._version}, requires_grad: {latents.requires_grad}")
 
-        # latents[:, :, 0: 1] = z
-        latents = torch.cat([z, latents[:, :, 1:]], dim=2)
+        z = pipe.vae.encode([image], device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)
+        # print(f"DEBUG: latents version before assignment: {latents._version}, requires_grad: {latents.requires_grad}")
+
+        latents[:, :, 0: 1] = z
+        # latents = torch.cat([z, latents[:, :, 1:]], dim=2)
+
+        # === 插入这里进行观测 ===
+        # 1. 看一眼被塞进去的 z (第一帧) 长啥样
+        # 这里的 z 是 (B, C, 1, H, W)
+        # visualize_latents(z, save_prefix="./debug_vis/z_first_frame")
+        
+        # 2. 看一眼整个 latents 现在的状态
+        # 这里的 latents 是 (B, C, 81, H, W)
+        # visualize_latents(latents, save_prefix="./debug_vis/latents_full")
+        # =======================
 
         # 这一行之后
-        print(f"DEBUG: latents version after assignment: {latents._version}")
+        # print(f"DEBUG: latents version after assignment: {latents._version}")
         return {"latents": latents, "fuse_vae_embedding_in_latents": True, "first_frame_latents": z}
 
 
@@ -978,16 +1075,16 @@ class WanVideoUnit_S2V(PipelineUnit):
         num_frames, height, width, tiled, tile_size, tile_stride = inputs_shared.get("num_frames"), inputs_shared.get("height"), inputs_shared.get("width"), inputs_shared.get("tiled"), inputs_shared.get("tile_size"), inputs_shared.get("tile_stride")
         input_audio, audio_embeds, audio_sample_rate = inputs_shared.pop("input_audio", None), inputs_shared.pop("audio_embeds", None), inputs_shared.get("audio_sample_rate", 16000)
         # 如果没传 "s2v_pose_video"，这里得到的变量就是 None，不报错
-        s2v_pose_video, s2v_pose_latents, motion_video = inputs_shared.pop("s2v_pose_video", None), inputs_shared.pop("s2v_pose_latents", None), inputs_shared.pop("motion_video", None)
+        # s2v_pose_video, s2v_pose_latents, motion_video = inputs_shared.pop("s2v_pose_video", None), inputs_shared.pop("s2v_pose_latents", None), inputs_shared.pop("motion_video", None)
 
         audio_input_positive = self.process_audio(pipe, input_audio, audio_sample_rate, num_frames, audio_embeds=audio_embeds)
         # # 把真正的音频特征给“正向提示词”
-        inputs_posi.update(audio_input_positive)
+        inputs_posi.update(audio_input_positive) # audio_input_positive["audio_embeds"].shape = [1, 25, 1024, 56]
         # 给“负向提示词”塞一个全 0 的静音特征 (CFG Guidance 的关键！)
         inputs_nega.update({"audio_embeds": 0.0 * audio_input_positive["audio_embeds"]})
 
-        inputs_shared.update(self.process_motion_latents(pipe, height, width, tiled, tile_size, tile_stride, motion_video))
-        inputs_shared.update(self.process_pose_cond(pipe, s2v_pose_video, num_frames, height, width, tiled, tile_size, tile_stride, s2v_pose_latents=s2v_pose_latents))
+        # inputs_shared.update(self.process_motion_latents(pipe, height, width, tiled, tile_size, tile_stride, motion_video))
+        # inputs_shared.update(self.process_pose_cond(pipe, s2v_pose_video, num_frames, height, width, tiled, tile_size, tile_stride, s2v_pose_latents=s2v_pose_latents))
         return inputs_shared, inputs_posi, inputs_nega
 
     @staticmethod
@@ -1497,38 +1594,40 @@ def model_fn_wans2v(
     x = latents[:, :, 1:]
 
     # context embedding
-    context = dit.text_embedding(context)
+    context = dit.text_embedding(context) # # [1, 512, 4096]->[1, 512, 5120]
 
     # audio encode
-    audio_emb_global, merged_audio_emb = dit.cal_audio_emb(audio_embeds)
+    audio_emb_global, merged_audio_emb = dit.cal_audio_emb(audio_embeds) 
 
     # x and s2v_pose_latents
-    s2v_pose_latents = torch.zeros_like(x) if s2v_pose_latents is None else s2v_pose_latents
-    x, (f, h, w) = dit.patchify(dit.patch_embedding(x) + dit.cond_encoder(s2v_pose_latents))
+    # s2v_pose_latents = torch.zeros_like(x) if s2v_pose_latents is None else s2v_pose_latents
+    # Patchify: 将视频像素块变成 Token 序列
+    # x, (f, h, w) = dit.patchify(dit.patch_embedding(x) + dit.cond_encoder(s2v_pose_latents))  #[1, 16800, 5120] # 
+    x, (f, h, w) = dit.patchify(dit.patch_embedding(x))
     seq_len_x = seq_len_x_global = x.shape[1] # global used for unified sequence parallel
 
     # reference image
-    ref_latents, (rf, rh, rw) = dit.patchify(dit.patch_embedding(origin_ref_latents))
+    ref_latents, (rf, rh, rw) = dit.patchify(dit.patch_embedding(origin_ref_latents)) # [1, 1200, 5120]
     grid_sizes = dit.get_grid_sizes((f, h, w), (rf, rh, rw))
     x = torch.cat([x, ref_latents], dim=1)
     # mask
     mask = torch.cat([torch.zeros([1, seq_len_x]), torch.ones([1, ref_latents.shape[1]])], dim=1).to(torch.long).to(x.device)
-    # freqs
+    # freqs ROPE:计算 3D 位置信息 (时间、高、宽)
     pre_compute_freqs = rope_precompute(x.detach().view(1, x.size(1), dit.num_heads, dit.dim // dit.num_heads), grid_sizes, dit.freqs, start=None)
     # motion
-    x, pre_compute_freqs, mask = dit.inject_motion(x, pre_compute_freqs, mask, motion_latents, drop_motion_frames=drop_motion_frames, add_last_motion=2)
+    # x, pre_compute_freqs, mask = dit.inject_motion(x, pre_compute_freqs, mask, motion_latents, drop_motion_frames=drop_motion_frames, add_last_motion=2)
 
-    x = x + dit.trainable_cond_mask(mask).to(x.dtype)
+    x = x + dit.trainable_cond_mask(mask).to(x.dtype)  # 加上一个可训练的 Mask Embedding，让模型区分“生成区”和“参考区”
 
     # tmod
-    timestep = torch.cat([timestep, torch.zeros([1], dtype=timestep.dtype, device=timestep.device)])
+    timestep = torch.cat([timestep, torch.zeros([1], dtype=timestep.dtype, device=timestep.device)]) # torch.Size([2]):[528., 0.]
     t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep))
-    t_mod = dit.time_projection(t).unflatten(1, (6, dit.dim)).unsqueeze(2).transpose(0, 2)
+    t_mod = dit.time_projection(t).unflatten(1, (6, dit.dim)).unsqueeze(2).transpose(0, 2) # ([1, 6, 2, 5120])
 
     if use_unified_sequence_parallel and dist.is_initialized() and dist.get_world_size() > 1:
         world_size, sp_rank = get_sequence_parallel_world_size(), get_sequence_parallel_rank()
         assert x.shape[1] % world_size == 0, f"the dimension after chunk must be divisible by world size, but got {x.shape[1]} and {get_sequence_parallel_world_size()}"
-        x = torch.chunk(x, world_size, dim=1)[sp_rank]
+        x = torch.chunk(x, world_size, dim=1)[sp_rank] # # 只拿自己那一份
         seg_idxs = [0] + list(torch.cumsum(torch.tensor([x.shape[1]] * world_size), dim=0).cpu().numpy())
         seq_len_x_list = [min(max(0, seq_len_x - seg_idxs[i]), x.shape[1]) for i in range(len(seg_idxs)-1)]
         seq_len_x = seq_len_x_list[sp_rank]
@@ -1538,7 +1637,7 @@ def model_fn_wans2v(
             return module(*inputs)
         return custom_forward
 
-    for block_id, block in enumerate(dit.blocks):
+    for block_id, block in enumerate(dit.blocks): #这部分的off-load比较浪费时间:30s
         if use_gradient_checkpointing_offload:
             with torch.autograd.graph.save_on_cpu():
                 x = torch.utils.checkpoint.checkpoint(
@@ -1551,7 +1650,7 @@ def model_fn_wans2v(
                     x,
                     use_reentrant=False,
                 )
-        elif use_gradient_checkpointing:
+        elif use_gradient_checkpointing: #todo:尝试不进行off-load，统计时间
             x = torch.utils.checkpoint.checkpoint(
                 create_custom_forward(block),
                 x, context, t_mod, seq_len_x, pre_compute_freqs[0],
@@ -1567,11 +1666,11 @@ def model_fn_wans2v(
             x = dit.after_transformer_block(block_id, x, audio_emb_global, merged_audio_emb, seq_len_x_global, use_unified_sequence_parallel)
 
     if use_unified_sequence_parallel and dist.is_initialized() and dist.get_world_size() > 1:
-        x = get_sp_group().all_gather(x, dim=1)
+        x = get_sp_group().all_gather(x, dim=1) # 如果用了多卡并行，这里把数据收回来拼好
 
     x = x[:, :seq_len_x_global]
-    x = dit.head(x, t[:-1])
-    x = dit.unpatchify(x, (f, h, w))
-    # make compatible with wan video
+    x = dit.head(x, t[:-1]) # torch.Size([1, 16800, 64]) head 是一个全连接层,把 Transformer 那个很厚（1536维）的抽象特征，投影回我们需要的像素特征维度
+    x = dit.unpatchify(x, (f, h, w)) # torch.Size([1, 16, 14, 80, 60])
+    # make compatible with wan video, # 把原始的首帧 (origin_ref_latents) 拼回去，组成完整的视频流返回
     x = torch.cat([origin_ref_latents, x], dim=2)
-    return x
+    return x # [1, 16, 15, 80, 60]

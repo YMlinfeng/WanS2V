@@ -10,26 +10,80 @@ import time
 from contextlib import contextmanager
 from collections import defaultdict
 
+import time
+from collections import defaultdict
+from contextlib import contextmanager
+import statistics
+
 class StepTimer:
     def __init__(self):
         self.times = defaultdict(list)
-    
+        self.step_keys = [] # 用于记录键的顺序，保证打印顺序一致
+
     @contextmanager
     def time_step(self, name):
+        if name not in self.step_keys:
+            self.step_keys.append(name)
         start = time.perf_counter()
         yield
         elapsed = time.perf_counter() - start
         self.times[name].append(elapsed)
-    
+
+    def record(self, name, elapsed):
+        """用于手动记录时间（例如数据加载）"""
+        if name not in self.step_keys:
+            self.step_keys.append(name)
+        self.times[name].append(elapsed)
+
     def print_summary(self):
-        print("\n" + "="*60)
-        print("计时统计摘要")
-        print("="*60)
-        for name, times in self.times.items():
-            avg = sum(times) / len(times)
-            total = sum(times)
-            print(f"{name:25s}: 平均 {avg*1000:8.2f}ms | 总计 {total:8.2f}s | 次数 {len(times)}")
-        print("="*60)
+        # 假设所有key记录的步数一致，取第一个key的长度
+        if not self.step_keys:
+            print("没有记录到任何时间数据。")
+            return
+            
+        num_steps = len(self.times[self.step_keys[0]])
+        
+        # --- 打印逐步详情表格 ---
+        print("\n" + "="*100)
+        print(f"{'Step 耗时详情 (单位: ms)':^100s}")
+        print("="*100)
+        
+        # 表头
+        headers = ["Step"] + self.step_keys + ["Total"]
+        # 动态调整列宽
+        col_width = 12 
+        header_str = "".join([f"{h:>{col_width}s}" for h in headers])
+        print(header_str)
+        print("-" * len(header_str))
+
+        # 内容行
+        for i in range(num_steps):
+            row_vals = []
+            step_total = 0.0
+            for key in self.step_keys:
+                val = self.times[key][i] * 1000 # 转换为毫秒
+                step_total += val
+                row_vals.append(f"{val:{col_width}.2f}")
+            
+            row_str = f"{i:>{col_width}d}" + "".join(row_vals) + f"{step_total:{col_width}.2f}"
+            print(row_str)
+
+        # --- 打印原来的平均值统计 ---
+        print("\n" + "="*100)
+        print(f"{'统计摘要':^100s}")
+        print("="*100)
+        print(f"{'阶段':<20s} | {'平均(ms)':>10s} | {'总计(s)':>10s} | {'占比':>8s}")
+        print("-" * 60)
+        
+        total_time_all_steps = sum(sum(v) for v in self.times.values())
+        
+        for name in self.step_keys:
+            values = self.times[name]
+            avg = statistics.mean(values) * 1000
+            total = sum(values)
+            ratio = (total / total_time_all_steps) * 100
+            print(f"{name:<20s} | {avg:10.2f} | {total:10.2f} | {ratio:7.1f}%")
+        print("="*100)
 
 def diagnose_default_training_status(model):
     """
@@ -203,7 +257,8 @@ def launch_training_task(
         num_epochs = args.num_epochs
         debug = args.debug
     
-    diagnose_default_training_status(model)
+    if debug:
+        diagnose_default_training_status(model)
     # optimizer = torch.optim.AdamW(model.trainable_modules(), lr=learning_rate, weight_decay=weight_decay)
     optimizer_grouped_parameters = prepare_model_and_optimizer_groups(
         model, 
@@ -216,49 +271,57 @@ def launch_training_task(
     
     model, optimizer, dataloader, scheduler = accelerator.prepare(model, optimizer, dataloader, scheduler)
     
-    # model_logger.on_training_start(accelerator, model)
+    if debug:
+        model_logger.on_training_start(accelerator, model)
+        timer = StepTimer()
+        end_time = time.perf_counter()
+        for epoch_id in range(num_epochs):
+            for step_index, data in enumerate(tqdm(dataloader, desc=f"Epoch {epoch_id}")):
+                
+                data_load_time = time.perf_counter() - end_time
+                timer.record("data_loading", data_load_time)
+                
+                if step_index > 10:
+                    break
+                    
+                with accelerator.accumulate(model):
+                    
+                    with timer.time_step("zero_grad"):
+                        optimizer.zero_grad()
+                    
+                    with timer.time_step("forward"):
+                        loss = model(data)
+                    
+                    with timer.time_step("backward"):
+                        accelerator.backward(loss)
+                    
+                    with timer.time_step("optimizer.step"):
+                        optimizer.step()
+                    
+                    with timer.time_step("model_logger"):
+                        model_logger.on_step_end(accelerator, model, save_steps)
+                    
+                    with timer.time_step("scheduler.step"):
+                        scheduler.step()
+
+                end_time = time.perf_counter()
+
+        timer.print_summary()
+        model_logger.on_training_end(accelerator, model, save_steps)
+
+    else:
+        model_logger.on_training_start(accelerator, model)
     
-    # for epoch_id in range(num_epochs):
-    #     for data in tqdm(dataloader):
-    #         with accelerator.accumulate(model):
-    #             optimizer.zero_grad()
-    #             loss = model(data)
-    #             accelerator.backward(loss)
-    #             optimizer.step()
-    #             model_logger.on_step_end(accelerator, model, save_steps)
-    #             scheduler.step() # 这一步为什么这么慢
-    # model_logger.on_training_end(accelerator, model, save_steps)
-
-    timer = StepTimer()
-
-    for epoch_id in range(num_epochs):
-        # for data in tqdm(dataloader):
-        for step_index, data in enumerate(tqdm(dataloader, desc=f"Epoch {epoch_id}")):
-            with accelerator.accumulate(model):
-                
-                with timer.time_step("zero_grad"):
+        for epoch_id in range(num_epochs):
+            for data in tqdm(dataloader):
+                with accelerator.accumulate(model):
                     optimizer.zero_grad()
-                
-                with timer.time_step("forward"):
                     loss = model(data)
-                
-                with timer.time_step("backward"):
                     accelerator.backward(loss)
-                
-                with timer.time_step("optimizer.step"):
                     optimizer.step()
-                
-                with timer.time_step("model_logger"):
                     model_logger.on_step_end(accelerator, model, save_steps)
-                
-                with timer.time_step("scheduler.step"):
-                    scheduler.step()
-
-    model_logger.on_training_end(accelerator, model, save_steps)
-
-    # 打印统计结果
-    timer.print_summary()
-
+                    scheduler.step() # 这一步为什么这么慢
+        model_logger.on_training_end(accelerator, model, save_steps)
 
 
 def launch_data_process_task(

@@ -203,10 +203,10 @@ class WanTrainingModule(DiffusionTrainingModule):
         return inputs_shared, inputs_posi, inputs_nega
     
     def forward(self, data, inputs=None):
-        visualize_tensor(data["video_path"], save_prefix="./debug_vis/test_data")
+        # visualize_tensor(data["video_path"], save_prefix="./debug_vis/test_data")
         if inputs is None: inputs = self.get_pipeline_inputs(data)
-        visualize_tensor(inputs[0]["input_video"], save_prefix="./debug_vis/test_input")
-        inputs = self.transfer_data_to_device(inputs, self.pipe.device, self.pipe.torch_dtype)
+        # visualize_tensor(inputs[0]["input_video"], save_prefix="./debug_vis/test_input")
+        inputs = self.transfer_data_to_device(inputs, self.pipe.device, self.pipe.torch_dtype)  #fp32->bf16
         
         for unit in self.pipe.units:
             inputs = self.pipe.unit_runner(unit, self.pipe, *inputs)
@@ -283,7 +283,7 @@ if __name__ == "__main__":
             ),
         }
     )
-    print("Load Model...")
+    # print("Load Model...")
     model = WanTrainingModule(
         model_paths=args.model_paths,
         model_id_with_origin_paths=args.model_id_with_origin_paths,
@@ -319,5 +319,5 @@ if __name__ == "__main__":
         "direct_distill": launch_training_task,
         "direct_distill:train": launch_training_task,
     }
-    print("Start Launching...")
+    # print("Start Launching...")
     launcher_map[args.task](accelerator, dataset, model, model_logger, args=args)

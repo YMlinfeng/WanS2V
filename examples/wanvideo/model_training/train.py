@@ -13,7 +13,9 @@ from diffsynth.core.data.operators import DataProcessingOperator
 import matplotlib.pyplot as plt
 import torchvision.transforms.functional as F
 # plt.imsave("output0.png", F.to_pil_image(input_image))
-
+import time
+from accelerate import Accelerator, DeepSpeedPlugin
+from accelerate.utils import DistributedType
 
 os.environ['http_proxy'] = 'http://oversea-squid1.jp.txyun:11080'
 os.environ['https_proxy'] = 'http://oversea-squid1.jp.txyun:11080'
@@ -233,23 +235,37 @@ def wan_parser():
 
 
 if __name__ == "__main__":
-    if os.environ.get("LOCAL_RANK", "0") == "0":
-        import debugpy
-        debugpy.listen(("0.0.0.0", 5678))
-        print("=" * 50)
-        print("Waiting for debugger to attach on port 5678...")
-        print("=" * 50)
-        debugpy.wait_for_client()  
-        print("Debugger attached! Continuing...")
+    # if os.environ.get("LOCAL_RANK", "0") == "0":
+    #     import debugpy
+    #     debugpy.listen(("0.0.0.0", 5678))
+    #     print("=" * 50)
+    #     print("Waiting for debugger to attach on port 5678...")
+    #     print("=" * 50)
+    #     debugpy.wait_for_client()  
+    #     print("Debugger attached! Continuing...")
     parser = wan_parser()
     args = parser.parse_args()
-    # print("acclerating...")
-    accelerator = accelerate.Accelerator(
+    deepspeed_plugin = DeepSpeedPlugin(
+        zero_stage=2,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        kwargs_handlers=[accelerate.DistributedDataParallelKwargs(find_unused_parameters=args.find_unused_parameters)],
+        offload_optimizer_device="cpu", 
+        offload_param_device="cpu",     
+        zero3_init_flag=False,
+    )
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        mixed_precision="bf16",
+        deepspeed_plugin=deepspeed_plugin, 
+        # kwargs_handlers=[accelerate.DistributedDataParallelKwargs(find_unused_parameters=args.find_unused_parameters)]
     )
 
-    print("Prepare the dataset...")
+    if accelerator.distributed_type != DistributedType.DEEPSPEED:
+        raise RuntimeError(
+            f"Fatal error: DeepSpeed not enabled, Current mode: {accelerator.distributed_type}\n"
+        )
+
+    accelerator.wait_for_everyone() 
+    # print("Prepare the dataset...")
     dataset = UnifiedDataset(
         base_path=args.dataset_base_path,
         metadata_path=args.dataset_metadata_path,
@@ -284,6 +300,12 @@ if __name__ == "__main__":
         }
     )
     # print("Load Model...")
+    # local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    # if local_rank > 0:
+    #     # 非主进程稍微等一下，让 rank 0 把文件句柄先拿住
+    #     time.sleep(2 * local_rank) 
+    # if accelerator.is_main_process:
+    accelerator.wait_for_everyone()  # <--- 加这句，确保大家都活过来了
     model = WanTrainingModule(
         model_paths=args.model_paths,
         model_id_with_origin_paths=args.model_id_with_origin_paths,
@@ -306,6 +328,11 @@ if __name__ == "__main__":
         max_timestep_boundary=args.max_timestep_boundary,
         min_timestep_boundary=args.min_timestep_boundary,
     )
+    # else:
+    #     model = None
+    # # 等待 Rank 0 加载完成
+    accelerator.wait_for_everyone()
+    # 广播模型（DeepSpeed 会自动处理）
     # model.debug_parameters()
     model_logger = ModelLogger(
         args.output_path,

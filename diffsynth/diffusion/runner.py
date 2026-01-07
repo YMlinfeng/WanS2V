@@ -15,75 +15,95 @@ from collections import defaultdict
 from contextlib import contextmanager
 import statistics
 
+
+import os
+import torch
+from datetime import datetime
+
 class StepTimer:
-    def __init__(self):
+    def __init__(self, log_file="training_perf.log"):
         self.times = defaultdict(list)
-        self.step_keys = [] # 用于记录键的顺序，保证打印顺序一致
+        self.step_keys = []
+        self.log_file = log_file
 
     @contextmanager
     def time_step(self, name):
         if name not in self.step_keys:
             self.step_keys.append(name)
+        # 确保 GPU 同步，否则时间统计不准
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         start = time.perf_counter()
         yield
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
         self.times[name].append(elapsed)
 
     def record(self, name, elapsed):
-        """用于手动记录时间（例如数据加载）"""
         if name not in self.step_keys:
             self.step_keys.append(name)
         self.times[name].append(elapsed)
 
-    def print_summary(self):
-        # 假设所有key记录的步数一致，取第一个key的长度
+    def print_summary(self, accelerator):
+        # 仅在主进程中执行打印和写文件
+        if not accelerator.is_main_process:
+            return
+
         if not self.step_keys:
-            print("没有记录到任何时间数据。")
             return
             
-        num_steps = len(self.times[self.step_keys[0]])
+        # 以记录最多的 key 为准（通常是 data_loading）
+        num_steps = max(len(self.times[k]) for k in self.step_keys)
         
-        # --- 打印逐步详情表格 ---
-        print("\n" + "="*100)
-        print(f"{'Step 耗时详情 (单位: ms)':^100s}")
-        print("="*100)
+        output = []
+        output.append("\n" + "="*120)
+        output.append(f"{'Step 耗时详情 (单位: ms) - ' + datetime.now().strftime('%Y-%m-%d %H:%M:%S'):^120s}")
+        output.append("="*120)
         
-        # 表头
         headers = ["Step"] + self.step_keys + ["Total"]
-        # 动态调整列宽
-        col_width = 12 
+        col_width = 15 
         header_str = "".join([f"{h:>{col_width}s}" for h in headers])
-        print(header_str)
-        print("-" * len(header_str))
+        output.append(header_str)
+        output.append("-" * len(header_str))
 
-        # 内容行
         for i in range(num_steps):
             row_vals = []
             step_total = 0.0
             for key in self.step_keys:
-                val = self.times[key][i] * 1000 # 转换为毫秒
+                # 健壮性处理：如果某项没有记录（比如梯度累积跳过了），记为 0
+                if i < len(self.times[key]):
+                    val = self.times[key][i] * 1000
+                else:
+                    val = 0.0
                 step_total += val
                 row_vals.append(f"{val:{col_width}.2f}")
             
             row_str = f"{i:>{col_width}d}" + "".join(row_vals) + f"{step_total:{col_width}.2f}"
-            print(row_str)
+            output.append(row_str)
 
-        # --- 打印原来的平均值统计 ---
-        print("\n" + "="*100)
-        print(f"{'统计摘要':^100s}")
-        print("="*100)
-        print(f"{'阶段':<20s} | {'平均(ms)':>10s} | {'总计(s)':>10s} | {'占比':>8s}")
-        print("-" * 60)
-        
+        # 统计摘要
+        output.append("\n" + "="*120)
+        output.append(f"{'统计摘要 (平均值)':^120s}")
+        output.append("="*120)
         total_time_all_steps = sum(sum(v) for v in self.times.values())
         
         for name in self.step_keys:
             values = self.times[name]
-            avg = statistics.mean(values) * 1000
-            total = sum(values)
-            ratio = (total / total_time_all_steps) * 100
-            print(f"{name:<20s} | {avg:10.2f} | {total:10.2f} | {ratio:7.1f}%")
-        print("="*100)
+            if values:
+                avg = statistics.mean(values) * 1000
+                total = sum(values)
+                ratio = (total / total_time_all_steps) * 100 if total_time_all_steps > 0 else 0
+                output.append(f"{name:<25s} | 平均: {avg:10.2f} ms | 总计: {total:10.2f} s | 占比: {ratio:7.1f}%")
+        
+        final_log = "\n".join(output)
+        
+        # 1. 打印到终端
+        print(final_log)
+        
+        # 2. 保存到文件
+        with open(self.log_file, "a", encoding="utf-8") as f:
+            f.write(final_log + "\n")
 
 def diagnose_default_training_status(model):
     """
@@ -273,17 +293,20 @@ def launch_training_task(
     
     if debug:
         model_logger.on_training_start(accelerator, model)
-        timer = StepTimer()
-        end_time = time.perf_counter()
+        log_name = f"perf_debug_{datetime.now().strftime('%m%d_%H%M')}.log"
+        timer = StepTimer(log_file=log_name)
         for epoch_id in range(num_epochs):
-            for step_index, data in enumerate(tqdm(dataloader, desc=f"Epoch {epoch_id}")):
+            end_time = time.perf_counter()
+            for step_index, data in enumerate(tqdm(dataloader, desc=f"Epoch {epoch_id}", disable=not accelerator.is_main_process)):
                 
+                # 1. 提前退出判断
+                if step_index > 50:
+                    break
+                
+                # 2. 记录数据加载时间
                 data_load_time = time.perf_counter() - end_time
                 timer.record("data_loading", data_load_time)
                 
-                if step_index > 10:
-                    break
-                    
                 with accelerator.accumulate(model):
                     
                     with timer.time_step("zero_grad"):
@@ -295,18 +318,27 @@ def launch_training_task(
                     with timer.time_step("backward"):
                         accelerator.backward(loss)
                     
-                    with timer.time_step("optimizer.step"):
-                        optimizer.step()
-                    
-                    with timer.time_step("model_logger"):
-                        model_logger.on_step_end(accelerator, model, save_steps)
-                    
-                    with timer.time_step("scheduler.step"):
-                        scheduler.step()
+                    if accelerator.sync_gradients:
+                        with timer.time_step("optimizer.step"):
+                            optimizer.step()
+                        
+                        with timer.time_step("model_logger"):
+                            model_logger.on_step_end(accelerator, model, save_steps)
+                        
+                        with timer.time_step("scheduler.step"):
+                            scheduler.step()
+                    else:
+                        # 如果没有执行更新，填充 0 以保持 Timer 内部列表对齐
+                        timer.record("optimizer.step", 0)
+                        timer.record("model_logger", 0)
+                        timer.record("scheduler.step", 0)
 
+                # 重置 end_time 用于下一轮 data_loading 统计
                 end_time = time.perf_counter()
 
-        timer.print_summary()
+        # 打印并保存结果
+        accelerator.wait_for_everyone() # 确保所有进程完成
+        timer.print_summary(accelerator)
         model_logger.on_training_end(accelerator, model, save_steps)
 
     else:

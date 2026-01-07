@@ -44,17 +44,39 @@ class DiskMap:
         self.rename_dict = self.fetch_rename_dict(state_dict_converter)
         
     def flush_files(self):
+        device_str = str(self.device)
+        if device_str == "cpu:0":
+            device_str = "cpu"
+
         if len(self.files) == 0:
             for path in self.path:
                 if path.endswith(".safetensors"):
-                    self.files.append(safe_open(path, framework="pt", device=str(self.device)))
+                    self.files.append(safe_open(path, framework="pt", device=device_str))
                 else:
                     self.files.append(SafetensorsCompatibleBinaryLoader(path, device=self.device))
         else:
             for i, path in enumerate(self.path):
                 if path.endswith(".safetensors"):
-                    self.files[i] = safe_open(path, framework="pt", device=str(self.device))
+                    self.files[i] = safe_open(path, framework="pt", device=device_str)
         self.num_params = 0
+    # def flush_files(self):
+    #     if len(self.files) == 0:
+    #         for path in self.path:
+    #             if path.endswith(".safetensors"):
+    #                 # 原代码：
+    #                 # self.files.append(safe_open(path, framework="pt", device=str(self.device)))
+    #                 # 兼容性修复方案：
+    #                 device_str = str(self.device)
+    #                 if device_str == "cpu:0":
+    #                     device_str = "cpu"
+    #                 self.files.append(safe_open(path, framework="pt", device=device_str))
+    #             else:
+    #                 self.files.append(SafetensorsCompatibleBinaryLoader(path, device=self.device))
+    #     else:
+    #         for i, path in enumerate(self.path):
+    #             if path.endswith(".safetensors"):
+    #                 self.files[i] = safe_open(path, framework="pt", device=str(self.device))
+    #     self.num_params = 0
 
     def __getitem__(self, name):
         if self.rename_dict is not None: name = self.rename_dict[name]

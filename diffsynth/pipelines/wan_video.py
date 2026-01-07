@@ -1081,7 +1081,7 @@ class WanVideoUnit_S2V(PipelineUnit):
         # inputs_shared.update(self.process_pose_cond(pipe, s2v_pose_video, num_frames, height, width, tiled, tile_size, tile_stride, s2v_pose_latents=s2v_pose_latents))
         return inputs_shared, inputs_posi, inputs_nega
 
-    @staticmethod
+    @staticmethod # todo：这个函数什么时候调用
     def pre_calculate_audio_pose(pipe: WanVideoPipeline, input_audio=None, audio_sample_rate=16000, s2v_pose_video=None, num_frames=81, height=448, width=832, fps=16, tiled=True, tile_size=(30, 52), tile_stride=(15, 26)):
         assert pipe.audio_encoder is not None and pipe.audio_processor is not None, "Please load audio encoder and audio processor first."
         shapes = WanVideoUnit_ShapeChecker().process(pipe, height, width, num_frames)

@@ -19,7 +19,7 @@ accelerate launch --config_file accelerate_config_node0.yaml \
   --dataset_base_path "" \
   --dataset_metadata_path "/m2v_intern/mengzijie/DiffSynth-Studio/720_filter_emo_40w_30fps_split_121f_with_md5_vae_caption_te_0925_40w_fix_pose.csv" \
   --data_file_keys "video_path,audio_path" \
-  --dataset_num_workers 8 \
+  --dataset_num_workers 0 \
   --save_steps 30 \
   --height 640 \
   --width 480 \
@@ -31,6 +31,6 @@ accelerate launch --config_file accelerate_config_node0.yaml \
   --num_epochs 1 \
   --trainable_models "dit" \
   --remove_prefix_in_ckpt "pipe.dit." \
-  --output_path "/m2v_intern/mengzijie/DiffSynth-Studio/models/train/Wan2.2-S2V-14B_T16" \
+  --output_path "/m2v_intern/mengzijie/DiffSynth-Studio/models/train/Wan2.2-S2V-14B_debug" \
   --extra_inputs "input_image,input_audio" \
   --use_gradient_checkpointing_offload

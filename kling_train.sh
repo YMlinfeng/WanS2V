@@ -23,13 +23,14 @@
 #kling
 # export MODELSCOPE_CACHE=/m2v_intern/mengzijie/Wan2.2/
 export http_proxy=http://10.66.16.238:11080 https_proxy=http://10.66.16.238:11080 no_proxy=localhost,127.0.0.1,localaddress,localdomain.com,internal,corp.kuaishou.com,test.gifshow.com,staging.kuaishou.com
+export PATH="/m2v_intern/mengzijie/env/wan2.2/bin:$PATH"
 
-accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
+accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B_8gpu.yaml examples/wanvideo/model_training/train.py \
   --dataset_base_path "" \
   --dataset_metadata_path "/m2v_intern/mengzijie/DiffSynth-Studio/emo_ge81f_verified.csv" \
   --data_file_keys "video_path,audio_path" \
   --dataset_num_workers 0 \
-  --save_steps 3 \
+  --save_steps 20 \
   --height 640 \
   --width 480 \
   --tgt_fps 15 \
@@ -42,5 +43,6 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --remove_prefix_in_ckpt "pipe.dit." \
   --output_path "/m2v_intern/mengzijie/DiffSynth-Studio/models/train/Wan2.2-S2V-14B_debug" \
   --extra_inputs "input_image,input_audio" \
-  --use_gradient_checkpointing_offload \
   --debug \
+  # --use_gradient_checkpointing_offload \
+  

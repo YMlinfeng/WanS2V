@@ -19,12 +19,10 @@ export DEEPSPEED_FORCE_MULTI_NODE=1
 cat $ACCELERATE_CONFIG_FILE
 
 # 3. 准备 Python 启动指令
-# 建议直接指向 conda 环境下的 python 解释器
 cd /m2v_intern/mengzijie/DiffSynth-Studio/
 PYTHON_EXE="/m2v_intern/mengzijie/env/wan2.2/bin/python"
 
 # 4. 执行 mpirun
-# 我们保留了官方所有的优化参数
 mpirun --allow-run-as-root -np $np \
     -mca plm_rsh_args "-p ${Port}" \
     -hostfile $hostfile \
@@ -52,7 +50,7 @@ mpirun --allow-run-as-root -np $np \
       --dataset_base_path "" \
       --dataset_metadata_path "/m2v_intern/mengzijie/DiffSynth-Studio/emo_ge81f_verified.csv" \
       --data_file_keys "video_path,audio_path" \
-      --dataset_num_workers 0 \
+      --dataset_num_workers 4 \
       --save_steps 20 \
       --height 640 \
       --width 480 \
@@ -66,6 +64,5 @@ mpirun --allow-run-as-root -np $np \
       --remove_prefix_in_ckpt "pipe.dit." \
       --output_path "/m2v_intern/mengzijie/DiffSynth-Studio/models/train/Wan2.2-S2V-14B_debug" \
       --extra_inputs "input_image,input_audio" \
-      --initialize_model_on_cpu \
       --debug \
     2>&1 | tee logs/wan_train_$(date +%Y.%m.%d_%H:%M:%S).log
